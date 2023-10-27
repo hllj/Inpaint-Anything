@@ -240,7 +240,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model_sam.to(device=device)
 model['sam'] = SamPredictor(model_sam)
 
-session = new_session("u2net")
+session = new_session("isnet-general-use")
 
 # build the lama model
 # lama_config = args.lama_config
@@ -283,7 +283,7 @@ with gr.Blocks() as demo:
                 image_resolution = gr.Slider(
                     label="Image Resolution",
                     minimum=256,
-                    maximum=768,
+                    maximum=1024,
                     value=512,
                     step=64,
                 )
@@ -293,7 +293,7 @@ with gr.Blocks() as demo:
             with gr.Row():
                 gr.Markdown("## Control Panel")
             text_prompt = gr.Textbox(label="Text Prompt")
-            lama = gr.Button("Inpaint Image", variant="primary")
+            # lama = gr.Button("Inpaint Image", variant="primary")
             replace_sd = gr.Button("Replace Anything with SD", variant="primary")
             clear_button_image = gr.Button(value="Reset", label="Reset", variant="secondary")
 
@@ -304,12 +304,6 @@ with gr.Blocks() as demo:
                 gr.Markdown("## Mask")
             with gr.Row():
                 click_mask = gr.Image(type="numpy", label="Click Mask")
-        with gr.Column():
-            with gr.Row():
-                gr.Markdown("## Image Removed with Mask")
-            with gr.Row():
-                img_rm_with_mask = gr.Image(
-                    type="numpy", label="Image Removed with Mask")
         with gr.Column():
             with gr.Row():
                 gr.Markdown("## Replace Anything with Mask")
@@ -345,11 +339,11 @@ with gr.Blocks() as demo:
     #     [img_with_mask_0, img_with_mask_1, img_with_mask_2, mask_0, mask_1, mask_2]
     # )
 
-    lama.click(
-        get_inpainted_img,
-        [origin_image, click_mask, image_resolution],
-        [img_rm_with_mask]
-    )
+    # lama.click(
+    #     get_inpainted_img,
+    #     [origin_image, click_mask, image_resolution],
+    #     [img_rm_with_mask]
+    # )
     
     replace_sd.click(
         get_replace_img_with_sd,
@@ -363,9 +357,9 @@ with gr.Blocks() as demo:
 
     clear_button_image.click(
         reset,
-        [origin_image, features, click_mask, img_rm_with_mask, img_replace_with_mask],
-        [origin_image, features, click_mask, img_rm_with_mask, img_replace_with_mask]
+        [origin_image, features, click_mask, img_replace_with_mask],
+        [origin_image, features, click_mask, img_replace_with_mask]
     )
 
 if __name__ == "__main__":
-    demo.queue(api_open=False).launch(server_name='0.0.0.0', share=False, debug=True)
+    demo.queue(api_open=False).launch(server_name='0.0.0.0', share=True)
