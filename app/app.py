@@ -18,6 +18,7 @@ from utils import load_img_to_array, save_array_to_img, dilate_mask, \
 from PIL import Image
 from segment_anything import SamPredictor, sam_model_registry
 import argparse
+from rembg import new_session, remove
 
 def setup_args(parser):
     parser.add_argument(
@@ -208,6 +209,12 @@ def image_upload(image, image_resolution):
         return image, features, orig_h, orig_w, input_h, input_w
     else:
         return None, None, None, None, None, None
+    
+def get_mask_rembg(image, image_resolution):
+    image = resize_image(image, image_resolution)
+    mask = remove(image, alpha_matting=True, alpha_matting_foreground_threshold=240, alpha_matting_background_threshold=10, alpha_matting_erode_size=10,
+                only_mask=True, post_process_mask=True, session=session)
+    return mask
 
 def get_inpainted_img(image, mask, image_resolution):
     lama_config = args.lama_config
@@ -233,11 +240,13 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model_sam.to(device=device)
 model['sam'] = SamPredictor(model_sam)
 
+session = new_session("u2net")
+
 # build the lama model
-lama_config = args.lama_config
-lama_ckpt = args.lama_ckpt
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model['lama'] = build_lama_model(lama_config, lama_ckpt, device=device)
+# lama_config = args.lama_config
+# lama_ckpt = args.lama_ckpt
+# device = "cuda" if torch.cuda.is_available() else "cpu"
+# model['lama'] = build_lama_model(lama_config, lama_ckpt, device=device)
 
 button_size = (100,50)
 with gr.Blocks() as demo:
@@ -263,14 +272,14 @@ with gr.Blocks() as demo:
                     label="Image: Upload an image and click the region you want to edit.",
                 )
             with gr.Row():
-                point_prompt = gr.Radio(
-                    choices=["Foreground Point",
-                                "Background Point"],
-                    value="Foreground Point",
-                    label="Point Label",
-                    interactive=True,
-                    show_label=False,
-                )
+                # point_prompt = gr.Radio(
+                #     choices=["Foreground Point",
+                #                 "Background Point"],
+                #     value="Foreground Point",
+                #     label="Point Label",
+                #     interactive=True,
+                #     show_label=False,
+                # )
                 image_resolution = gr.Slider(
                     label="Image Resolution",
                     minimum=256,
@@ -278,7 +287,8 @@ with gr.Blocks() as demo:
                     value=512,
                     step=64,
                 )
-                dilate_kernel_size = gr.Slider(label="Dilate Kernel Size", minimum=0, maximum=30, step=1, value=3)
+                # dilate_kernel_size = gr.Slider(label="Dilate Kernel Size", minimum=0, maximum=30, step=1, value=3)
+                remove_bg = gr.Button("Remove Background", variant="primary")
         with gr.Column(variant="panel"):
             with gr.Row():
                 gr.Markdown("## Control Panel")
@@ -312,15 +322,22 @@ with gr.Blocks() as demo:
         inputs=[source_image_click, image_resolution],
         outputs=[origin_image, features, orig_h, orig_w, input_h, input_w],
     )
-    source_image_click.select(
-        process_image_click,
-        inputs=[origin_image, point_prompt,
-                clicked_points, image_resolution,
-                features, orig_h, orig_w, input_h, input_w],
-        outputs=[source_image_click, clicked_points, click_mask],
-        show_progress=True,
-        queue=True,
+
+    remove_bg.click(
+        get_mask_rembg,
+        [source_image_click, image_resolution],
+        outputs=[click_mask],
     )
+
+    # source_image_click.select(
+    #     process_image_click,
+    #     inputs=[origin_image, point_prompt,
+    #             clicked_points, image_resolution,
+    #             features, orig_h, orig_w, input_h, input_w],
+    #     outputs=[source_image_click, clicked_points, click_mask],
+    #     show_progress=True,
+    #     queue=True,
+    # )
 
     # sam_mask.click(
     #     get_masked_img,
