@@ -1,5 +1,8 @@
 import os
 import sys
+import requests
+import json
+import re
 sys.path.append(os.path.abspath(os.path.dirname(os.getcwd())))
 os.chdir("../")
 import cv2
@@ -42,6 +45,31 @@ def mkstemp(suffix, dir=None):
     os.close(fd)
     return Path(path)
 
+def prompt_generation(title):
+    url = "https://zagenai1.openai.azure.com/openai/deployments/zagpt35turbo/chat/completions?api-version=2023-08-01-preview"
+
+    payload = json.dumps({
+    "messages": [
+        {
+        "role": "system",
+        "content": "You are an artist who knows how to use and prompt Stable Diffusion to generate image background. You will be given a topic and describe in detail the background of the photo that matches the given topic. Here’s a formula for a Stable Diffusion image prompt: An image of [adjective] [subject] [doing action], [creative lighting style], detailed, realistic. Use the above formula to give suggestions for [adjective], [doing action], [creative light style]."
+        },
+        {
+        "role": "user",
+        "content": f"Give 3 suggestions for describing the background of photos for Stable Diffusion on the theme of '{title}'. Only give me the sentence.\nOutput:\n1.\n2.\n3.\n4\n5."
+        }
+    ]
+    })
+    headers = {
+    'api-key': '<api-key>',
+    'Content-Type': 'application/json'
+    }
+
+    response = requests.request("POST", url, headers=headers, data=payload)
+    data = response.json()
+    prompts = data['choices'][0]['message']['content'].split('\n')
+    prompts = [re.sub('\d.\s', '', prompt) for prompt in prompts]
+    return prompts
 
 def get_sam_feat(img):
     model['sam'].set_image(img)
@@ -62,9 +90,11 @@ def get_replace_img_with_sd(image, mask, image_resolution, text_prompt):
     np_image = HWC3(np_image)
     np_image = resize_image(np_image, image_resolution)
 
-    img_replaced = replace_img_with_sd(np_image, mask, text_prompt, device=device)
-    img_replaced = img_replaced.astype(np.uint8)
-    return img_replaced
+    prompts = prompt_generation(text_prompt)
+    print('Generate prommpt', prompts)
+    neg_promt = "blurry, cropped, ugly, bad quality, interlaced fingers, fused fingers, too many fingers, painting, rendering, graphic design, watermark, Forehead, manicure, drawing, sketch, duplicate, morbid, mutilated, mutated, deformed, disfigured, extra limbs, malformed limbs, missing arms, missing legs, extra arms, extra legs, long neck, grayscale, b&w"
+    results = replace_img_with_sd(np_image, mask, prompts, neg_promt, device=device)
+    return results
 
 def HWC3(x):
     assert x.dtype == np.uint8
@@ -200,12 +230,14 @@ def process_image_click(original_image, point_prompt, clicked_points, image_reso
     )
 
 def image_upload(image, image_resolution):
+    print('check', image)
     if image is not None:
         np_image = np.array(image, dtype=np.uint8)
         H, W, C = np_image.shape
         np_image = HWC3(np_image)
         np_image = resize_image(np_image, image_resolution)
         features, orig_h, orig_w, input_h, input_w = get_sam_feat(np_image)
+        print('get here')
         return image, features, orig_h, orig_w, input_h, input_w
     else:
         return None, None, None, None, None, None
@@ -214,6 +246,17 @@ def get_mask_rembg(image, image_resolution):
     image = resize_image(image, image_resolution)
     mask = remove(image, alpha_matting=True, alpha_matting_foreground_threshold=240, alpha_matting_background_threshold=10, alpha_matting_erode_size=10,
                 only_mask=True, post_process_mask=True, session=session)
+    if expand_iteration is not None:
+        mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(3,3)), iterations=expand_iteration.value)
+    mask_blur_x = 4
+    mask_blur_y = 4
+
+    kernel_size = 2 * int(2.5 * mask_blur_x + 0.5) + 1
+    mask = cv2.GaussianBlur(mask, (kernel_size, 1), mask_blur_x)
+
+    kernel_size = 2 * int(2.5 * mask_blur_y + 0.5) + 1
+    mask = cv2.GaussianBlur(mask, (1, kernel_size), mask_blur_y)
+
     return mask
 
 def get_inpainted_img(image, mask, image_resolution):
@@ -267,7 +310,7 @@ with gr.Blocks() as demo:
                 # img = gr.Image(label="Input Image")
                 source_image_click = gr.Image(
                     type="numpy",
-                    height=300,
+                    height="auto",
                     interactive=True,
                     label="Image: Upload an image and click the region you want to edit.",
                 )
@@ -287,7 +330,7 @@ with gr.Blocks() as demo:
                     value=512,
                     step=64,
                 )
-                # dilate_kernel_size = gr.Slider(label="Dilate Kernel Size", minimum=0, maximum=30, step=1, value=3)
+                expand_iteration = gr.Slider(label="Expand iteration", minimum=0, maximum=100, step=1, value=1)
                 remove_bg = gr.Button("Remove Background", variant="primary")
         with gr.Column(variant="panel"):
             with gr.Row():
@@ -295,7 +338,7 @@ with gr.Blocks() as demo:
             text_prompt = gr.Textbox(label="Text Prompt")
             # lama = gr.Button("Inpaint Image", variant="primary")
             replace_sd = gr.Button("Replace Anything with SD", variant="primary")
-            clear_button_image = gr.Button(value="Reset", label="Reset", variant="secondary")
+            clear_button_image = gr.Button(value="Reset", variant="secondary")
 
     # todo: maybe we can delete this row, for it's unnecessary to show the original mask for customers
     with gr.Row(variant="panel"):
@@ -303,13 +346,20 @@ with gr.Blocks() as demo:
             with gr.Row():
                 gr.Markdown("## Mask")
             with gr.Row():
-                click_mask = gr.Image(type="numpy", label="Click Mask")
+                click_mask = gr.Image(
+                    type="numpy", label="Click Mask", height="auto"
+                )
         with gr.Column():
             with gr.Row():
                 gr.Markdown("## Replace Anything with Mask")
             with gr.Row():
-                img_replace_with_mask = gr.Image(
-                    type="numpy", label="Image Replace Anything with Mask")
+                gallery = gr.Gallery(
+                    label="Generated images", show_label=False, elem_id="gallery",
+                    object_fit="contain", height="auto"
+                )
+                # img_replace_with_mask = gr.Image(
+                #     type="numpy", label="Image Replace Anything with Mask", height="auto"
+                # )
 
     source_image_click.upload(
         image_upload,
@@ -348,7 +398,7 @@ with gr.Blocks() as demo:
     replace_sd.click(
         get_replace_img_with_sd,
         [origin_image, click_mask, image_resolution, text_prompt],
-        [img_replace_with_mask]
+        gallery
     )
 
 
@@ -357,8 +407,8 @@ with gr.Blocks() as demo:
 
     clear_button_image.click(
         reset,
-        [origin_image, features, click_mask, img_replace_with_mask],
-        [origin_image, features, click_mask, img_replace_with_mask]
+        [origin_image, features, click_mask],
+        [origin_image, features, click_mask]
     )
 
 if __name__ == "__main__":
