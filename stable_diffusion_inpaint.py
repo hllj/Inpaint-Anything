@@ -7,6 +7,8 @@ import numpy as np
 import PIL.Image as Image
 from pathlib import Path
 from diffusers import StableDiffusionInpaintPipeline
+from diffusers import UniPCMultistepScheduler
+
 from utils.mask_processing import crop_for_filling_pre, crop_for_filling_post
 from utils.crop_for_replacing import recover_size, resize_and_pad
 from utils import load_img_to_array, save_array_to_img
@@ -35,27 +37,45 @@ def fill_img_with_sd(
 def replace_img_with_sd(
         img: np.ndarray,
         mask: np.ndarray,
-        text_prompt: str,
+        prompts,
+        neg_promt,
         step: int = 50,
         device="cuda"
 ):
     pipe = StableDiffusionInpaintPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-2-inpainting",
+        "runwayml/stable-diffusion-inpainting",
         torch_dtype=torch.float32,
     ).to(device)
+    # speed up diffusion process with faster scheduler and memory optimization
+    pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
+    # remove following line if xformers is not installed
+    pipe.enable_xformers_memory_efficient_attention()
+
+    pipe.enable_model_cpu_offload()
+
     img_padded, mask_padded, padding_factors = resize_and_pad(img, mask)
-    img_padded = pipe(
-        prompt=text_prompt,
+    height, width, _ = img.shape
+
+    imgs_gen = pipe(
+        prompt=prompts,
+        negative_prompt=[neg_promt] * len(prompts),
         image=Image.fromarray(img_padded),
         mask_image=Image.fromarray(255 - mask_padded),
         num_inference_steps=step,
-    ).images[0]
-    height, width, _ = img.shape
-    img_resized, mask_resized = recover_size(
-        np.array(img_padded), mask_padded, (height, width), padding_factors)
-    mask_resized = np.expand_dims(mask_resized, -1) / 255
-    img_resized = img_resized * (1-mask_resized) + img * mask_resized
-    return img_resized
+        strength=0.75,
+        num_images_per_prompt=2
+    ).images
+    
+    results = []
+    for img_gen in imgs_gen:
+        img_resized, mask_resized = recover_size(
+            np.array(img_gen), mask_padded, (height, width), padding_factors)
+        mask_resized = np.expand_dims(mask_resized, -1) / 255
+        img_resized = img_resized * (1-mask_resized) + img * mask_resized
+        img_resized = img_resized.astype(np.uint8)
+        results.append(img_resized)
+    
+    return results
 
 
 def setup_args(parser):
